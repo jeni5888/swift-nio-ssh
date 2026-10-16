@@ -29,12 +29,20 @@ struct SSHPacketParser {
     private let maximumPacketSize: Int
     internal static let defaultMaximumPacketSize = 1 << 17
 
+    /// Whether this parser reads the peer's identification string as a server would.
+    ///
+    /// RFC 4253 section 4.2 permits preamble lines only from the server to the client, so the
+    /// tolerant scan in `readVersion` is a client-role behaviour. A server must hand its first
+    /// received line on unchanged, whatever it contains, so that `validateBanner` can reject a
+    /// client that sent preamble. apple carries the same flag for the same reason (ded5e5c).
+    private let isServer: Bool
+
     /// Testing only: the number of bytes we can discard from this buffer.
     internal var _discardableBytes: Int {
         self.buffer.readerIndex
     }
 
-    init(allocator: ByteBufferAllocator, maximumPacketSize: Int = defaultMaximumPacketSize) {
+    init(allocator: ByteBufferAllocator, maximumPacketSize: Int = defaultMaximumPacketSize, isServer: Bool = false) {
         // Assert that users don't provide a packet size lower than allowed by spec
         precondition(maximumPacketSize >= 32768, "Maximum Packet Size is below minimum requirement as specified by RFC 4254")
         precondition(maximumPacketSize <= (1 << 24), "Maximum Packet Size is set abnormally high")
@@ -42,6 +50,7 @@ struct SSHPacketParser {
         self.buffer = allocator.buffer(capacity: 0)
         self.state = .initialized
         self.maximumPacketSize = maximumPacketSize
+        self.isServer = isServer
     }
 
     mutating func append(bytes: inout ByteBuffer) {
@@ -150,7 +159,10 @@ struct SSHPacketParser {
                 let lineSlice = slice[lineStartIndex..<index]
                 
                 // Check if this line looks like an SSH version (any SSH version, not just 2.0)
-                if lineSlice.count >= 4 && lineSlice.starts(with: "SSH-".utf8) {
+                // As a server, the first line IS the identification string -- preamble lines are
+                // not allowed in that direction, and swallowing them here would silently remove
+                // the rejection in validateBanner (AcceptsVersionMessages.swift, .server branch).
+                if self.isServer || (lineSlice.count >= 4 && lineSlice.starts(with: "SSH-".utf8)) {
                     // Found the SSH version line. Per RFC 4253 section 4.2 only this line is the
                     // identification string and only it may enter the exchange hash as V_S -- the
                     // preamble lines before it must not. Taking the slice from the buffer start

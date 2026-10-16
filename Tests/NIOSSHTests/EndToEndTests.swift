@@ -1170,6 +1170,41 @@ class EndToEndTests: XCTestCase {
         XCTAssertNoThrow(try promise.futureResult.wait())
     }
 
+    /// A server that prints a banner (one or more preamble lines, as a bastion host or a TCP
+    /// wrapper does) *before* its identification string must still yield a working connection.
+    /// RFC 4253 section 4.2 allows those lines and they are NOT part of V_S, so they must not
+    /// reach the key-exchange hash.
+    func testHandshakeSucceedsWhenServerSendsPreambleBeforeIdentificationString() throws {
+        // Default harness on purpose: bundled ECDH key exchange + bundled AES-GCM transport
+        // protection, i.e. the client really verifies the server's signature over the exchange
+        // hash. Do not substitute harness.keyExchangeAlgorithms / transportProtectionAlgoritms
+        // here -- the test doubles in this file (CustomKeyExchange, CustomTransportProtection)
+        // would hide the very check this test depends on.
+        XCTAssertNoThrow(try self.channel.configureWithHarness(TestHarness()))
+        XCTAssertNoThrow(try self.channel.activate())
+
+        // The server's identification string is still sitting in the server channel's outbound
+        // buffer -- interactInMemory() has not run yet -- so these bytes arrive at the client's
+        // packet parser strictly before "SSH-2.0-SwiftNIOSSH_1.0\r\n", exactly as a real banner
+        // would. This must come AFTER activate(): before activation the client's connection state
+        // machine is .idle, where bufferInboundData() hits a preconditionFailure.
+        XCTAssertNoThrow(try self.channel.client.writeInbound(ByteBuffer(string: "Welcome to the bastion\r\n")))
+
+        // Run the whole handshake: version exchange, key exchange (including the client verifying
+        // the server host key's signature over the exchange hash) and user authentication.
+        XCTAssertNoThrow(try self.channel.interactInMemory())
+
+        // Proof the *connection* came up, not merely that bytes moved: user auth completed, so the
+        // server recorded the authenticated username offered by the harness' auth delegate.
+        XCTAssertEqual(self.channel.serverSSHHandler?.username, "foo")
+
+        // ...and a child channel can be opened over the now-encrypted, authenticated connection,
+        // which is only reachable from the .active state.
+        _ = try self.channel.createNewChannel()
+        XCTAssertNoThrow(try self.channel.interactInMemory())
+        XCTAssertEqual(self.channel.activeServerChannels.count, 1)
+    }
+
     func testServerDoesNotSendBanner() throws {
         class ClientHandshakeHandler: ChannelInboundHandler {
             typealias InboundIn = Any

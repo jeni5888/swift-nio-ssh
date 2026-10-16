@@ -67,7 +67,11 @@ final class SSHPacketParserTests: XCTestCase {
 
         switch try parser.nextPacket() {
         case .version(let string):
-            XCTAssertEqual(string, "xxxx\r\nyyyy\r\nSSH-2.0-OpenSSH_7.9")
+            // Only the SSH- line is the identification string (RFC 4253 section 4.2); the
+            // preamble lines must not be returned, because this value becomes V_S in the
+            // key-exchange hash. apple asserts the same value for the client role
+            // (apple/main Tests/NIOSSHTests/SSHPacketParserTests.swift:451).
+            XCTAssertEqual(string, "SSH-2.0-OpenSSH_7.9")
         default:
             XCTFail("Expecting .version")
         }
@@ -105,7 +109,7 @@ final class SSHPacketParserTests: XCTestCase {
 
         switch try parser.nextPacket() {
         case .version(let string):
-            XCTAssertEqual(string, "xxxx\nyyyy\nSSH-2.0-OpenSSH_7.4")
+            XCTAssertEqual(string, "SSH-2.0-OpenSSH_7.4")
         default:
             XCTFail("Expecting .version")
         }
