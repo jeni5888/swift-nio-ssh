@@ -93,18 +93,22 @@ final class SSHPacketParserLengthOverflowTests: XCTestCase {
         }
     }
 
-    /// The whole trapping WINDOW, not just its last value.
+    /// The whole trapping WINDOW — every value in it, not a sample of it.
     ///
     /// The test above feeds exactly `UInt32.max`, and that is too narrow to pin the property: a
     /// guard written `packetLength != UInt32.max` would pass it while leaving the trap alive for
     /// every length in `UInt32.max - macBytes ... UInt32.max - 1` (measured: that wrong guard keeps
     /// the test above green). Any length in that window overflows `packetLength + macBytes`, so
     /// each one must come back as a protocol error instead of killing the process.
+    ///
+    /// The window is exactly `macBytes` values wide, so it is walked in full rather than sampled:
+    /// a review measured that three samples still let a guard through that enumerated precisely
+    /// those three, and "walks the whole window" has to be literally true to be worth saying.
     func testEveryLengthInTheOverflowWindowIsRejected() throws {
         let protection = try self.makeProtection()
-        // macBytes = 16, so the window is the last 16 representable lengths. Take its two ends and
-        // one value in between; the first is also the one a `!= UInt32.max` guard would let through.
-        for length in [UInt32.max - 1, UInt32.max - UInt32(protection.macBytes) + 1, UInt32.max] {
+        // packetLength + macBytes overflows exactly when packetLength > UInt32.max - macBytes.
+        let firstOverflowing = UInt32.max - UInt32(protection.macBytes) + 1
+        for length in firstOverflowing...UInt32.max {
             var parser = SSHPacketParser(allocator: ByteBufferAllocator())
             self.feedVersion(to: &parser)
             parser.addEncryption(protection)
