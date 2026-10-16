@@ -1175,11 +1175,10 @@ class EndToEndTests: XCTestCase {
     /// RFC 4253 section 4.2 allows those lines and they are NOT part of V_S, so they must not
     /// reach the key-exchange hash.
     func testHandshakeSucceedsWhenServerSendsPreambleBeforeIdentificationString() throws {
-        // Default harness on purpose: bundled ECDH key exchange + bundled AES-GCM transport
-        // protection, i.e. the client really verifies the server's signature over the exchange
-        // hash. Do not substitute harness.keyExchangeAlgorithms / transportProtectionAlgoritms
-        // here -- the test doubles in this file (CustomKeyExchange, CustomTransportProtection)
-        // would hide the very check this test depends on.
+        // Default harness on purpose: this exercises the bundled ECDH key exchange and the
+        // bundled AES-GCM transport protection end to end, so the client really verifies the
+        // server's signature over the exchange hash (EllipticCurveKeyExchange, via
+        // SSHKeyExchangeStateMachine.bundledKeyExchangeImplementations).
         XCTAssertNoThrow(try self.channel.configureWithHarness(TestHarness()))
         XCTAssertNoThrow(try self.channel.activate())
 

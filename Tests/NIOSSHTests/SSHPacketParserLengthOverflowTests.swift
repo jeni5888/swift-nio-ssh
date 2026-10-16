@@ -27,7 +27,8 @@ import XCTest
 /// consulted. The length must be bounded *before* the add.
 final class SSHPacketParserLengthOverflowTests: XCTestCase {
     /// Feeds the SSH version string so the parser reaches `.cleartextWaitingForLength` — the only
-    /// state from which `addEncryption` is permitted (`SSHPacketParser.swift:55-62`).
+    /// state from which `SSHPacketParser.addEncryption(_:)` is permitted. (Cited by symbol, not by
+    /// line: the fix this file covers inserted lines above it.)
     private func feedVersion(to parser: inout SSHPacketParser, file: StaticString = #filePath, line: UInt = #line) {
         var version = ByteBuffer.of(string: "SSH-2.0-OpenSSH_7.9\r\n")
         parser.append(bytes: &version)
@@ -86,7 +87,8 @@ final class SSHPacketParserLengthOverflowTests: XCTestCase {
         parser.append(bytes: &firstBlock)
 
         XCTAssertThrowsError(try parser.nextPacket()) { error in
-            // Same error as the surviving post-add check at `SSHPacketParser.swift:184-186`.
+            // Same error as the surviving post-add check (`decryptedLength >= maximumPacketSize`),
+            // which the fix deliberately leaves in place.
             XCTAssertEqual((error as? NIOSSHError)?.type, .invalidEncryptedPacketLength)
         }
     }
