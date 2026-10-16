@@ -179,6 +179,18 @@ struct SSHPacketParser {
 
         // This force unwrap is safe because we must have a block size, and a block size is always going to be more than 4 bytes.
         let packetLength = self.buffer.getInteger(at: self.buffer.readerIndex, as: UInt32.self)!
+
+        // Bound the attacker-supplied length BEFORE adding the MAC length. `+` on UInt32 traps on
+        // overflow, so a packetLength within macBytes of UInt32.max crashed the process right here --
+        // pre-authentication, since the length is read before the packet's MAC is verified, and before
+        // the check below could reject it. apple/main bounds first for the same reason
+        // (its `maximumEncryptedPacketLength` guard). The check below stays, so the set of lengths
+        // this parser accepts is unchanged; `maximumPacketSize <= 1 << 24` (init precondition) is what
+        // makes the addition unable to overflow once this guard has passed.
+        guard packetLength < self.maximumPacketSize else {
+            throw NIOSSHError.invalidEncryptedPacketLength
+        }
+
         let decryptedLength = packetLength + UInt32(protection.macBytes)
 
         if decryptedLength >= self.maximumPacketSize {
