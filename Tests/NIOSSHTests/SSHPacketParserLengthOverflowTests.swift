@@ -160,6 +160,26 @@ final class SSHPacketParserLengthOverflowTests: XCTestCase {
         XCTAssertThrowsError(try parser2.nextPacket()) { error in
             XCTAssertEqual((error as? NIOSSHError)?.type, .invalidEncryptedPacketLength)
         }
+
+        // The first length the POST-add check alone rejects. A reviewer measured that deleting that
+        // check entirely left the whole suite green, because every length the two tests above use is
+        // decided by the pre-add guard: `maximumPacketSize` fails both checks, and
+        // `maximumPacketSize - macBytes - 1` passes both. The window in between —
+        // `maximumPacketSize - macBytes ... maximumPacketSize - 1` — is the post-add check's own
+        // territory, and this is its boundary.
+        var firstPostAddRejection = ByteBuffer.of(
+            bytes: self.lengthBlock(
+                UInt32(maximumPacketSize - protection.macBytes),
+                blockSize: protection.cipherBlockSize
+            )
+        )
+        var parser3 = SSHPacketParser(allocator: ByteBufferAllocator())
+        self.feedVersion(to: &parser3)
+        parser3.addEncryption(protection)
+        parser3.append(bytes: &firstPostAddRejection)
+        XCTAssertThrowsError(try parser3.nextPacket()) { error in
+            XCTAssertEqual((error as? NIOSSHError)?.type, .invalidEncryptedPacketLength)
+        }
     }
 
     /// One cipher block whose first four bytes are `length` big-endian, zero-padded.
