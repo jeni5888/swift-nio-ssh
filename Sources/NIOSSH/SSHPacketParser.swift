@@ -151,8 +151,14 @@ struct SSHPacketParser {
                 
                 // Check if this line looks like an SSH version (any SSH version, not just 2.0)
                 if lineSlice.count >= 4 && lineSlice.starts(with: "SSH-".utf8) {
-                    // Found SSH version line, return everything up to and including this line
-                    var version = String(decoding: slice[slice.startIndex..<index], as: UTF8.self)
+                    // Found the SSH version line. Per RFC 4253 section 4.2 only this line is the
+                    // identification string and only it may enter the exchange hash as V_S -- the
+                    // preamble lines before it must not. Taking the slice from the buffer start
+                    // returned them too, which made V_S differ from what the server hashed, so the
+                    // key-exchange signature check failed and every banner-printing server was
+                    // unreachable. apple fixed the same defect in ded5e5c. The reader index below is
+                    // unchanged: the preamble is still consumed, just no longer returned.
+                    var version = String(decoding: lineSlice, as: UTF8.self)
                     // read including \n
                     self.buffer.moveReaderIndex(forwardBy: slice.startIndex.distance(to: index).advanced(by: 1))
                     // Remove the trailing \r if present (but keep \n removal logic for consistency)
