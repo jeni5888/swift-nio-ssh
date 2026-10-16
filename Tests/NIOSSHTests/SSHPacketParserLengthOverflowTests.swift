@@ -92,4 +92,78 @@ final class SSHPacketParserLengthOverflowTests: XCTestCase {
             XCTAssertEqual((error as? NIOSSHError)?.type, .invalidEncryptedPacketLength)
         }
     }
+
+    /// The whole trapping WINDOW, not just its last value.
+    ///
+    /// The test above feeds exactly `UInt32.max`, and that is too narrow to pin the property: a
+    /// guard written `packetLength != UInt32.max` would pass it while leaving the trap alive for
+    /// every length in `UInt32.max - macBytes ... UInt32.max - 1` (measured: that wrong guard keeps
+    /// the test above green). Any length in that window overflows `packetLength + macBytes`, so
+    /// each one must come back as a protocol error instead of killing the process.
+    func testEveryLengthInTheOverflowWindowIsRejected() throws {
+        let protection = try self.makeProtection()
+        // macBytes = 16, so the window is the last 16 representable lengths. Take its two ends and
+        // one value in between; the first is also the one a `!= UInt32.max` guard would let through.
+        for length in [UInt32.max - 1, UInt32.max - UInt32(protection.macBytes) + 1, UInt32.max] {
+            var parser = SSHPacketParser(allocator: ByteBufferAllocator())
+            self.feedVersion(to: &parser)
+            parser.addEncryption(protection)
+            var block = ByteBuffer.of(bytes: self.lengthBlock(length, blockSize: protection.cipherBlockSize))
+            parser.append(bytes: &block)
+            XCTAssertThrowsError(try parser.nextPacket(), "length \(length) must be rejected") { error in
+                XCTAssertEqual((error as? NIOSSHError)?.type, .invalidEncryptedPacketLength)
+            }
+        }
+    }
+
+    /// The bound itself, from both sides.
+    ///
+    /// The overflow test above pins ONE value (`UInt32.max`). This one pins the BOUNDARY, which is
+    /// the property the pre-add guard was added under: that the set of accepted lengths is
+    /// unchanged. `maximumPacketSize - macBytes - 1` is the largest length the parser accepted
+    /// before the guard existed and must still be accepted; `maximumPacketSize` must be rejected.
+    ///
+    /// What this test deliberately does NOT claim, because it was measured: it does not catch an
+    /// off-by-one IN the pre-add guard. Turning its `<` into `<=` leaves this test green — and
+    /// nothing could catch it, because such a change has no observable effect at all. The
+    /// surviving post-add check rejects everything from `maximumPacketSize - macBytes` upwards, so
+    /// it already covers every value the pre-add guard's comparison could disagree about. The
+    /// guard's unique duty is the arithmetic trap near `UInt32.max`, and the test above pins that.
+    func testTheLengthBoundIsCheckedFromBothSides() throws {
+        let protection = try self.makeProtection()
+        let maximumPacketSize = SSHPacketParser.defaultMaximumPacketSize
+
+        // Just inside: accepted by the length check, so `decryptLength` must not throw. The parser
+        // then waits for the rest of the packet, i.e. `nextPacket()` returns nil rather than
+        // erroring — which is exactly what "this length was accepted" looks like from outside.
+        var parser = SSHPacketParser(allocator: ByteBufferAllocator())
+        self.feedVersion(to: &parser)
+        parser.addEncryption(protection)
+        let accepted = UInt32(maximumPacketSize - protection.macBytes - 1)
+        var insideBlock = ByteBuffer.of(bytes: self.lengthBlock(accepted, blockSize: protection.cipherBlockSize))
+        parser.append(bytes: &insideBlock)
+        XCTAssertNoThrow(XCTAssertNil(try parser.nextPacket()))
+
+        // On the bound: rejected. `maximumPacketSize` + macBytes is >= maximumPacketSize, which the
+        // surviving post-add check rejects, and the pre-add guard rejects it too.
+        var parser2 = SSHPacketParser(allocator: ByteBufferAllocator())
+        self.feedVersion(to: &parser2)
+        parser2.addEncryption(protection)
+        var onBoundBlock = ByteBuffer.of(
+            bytes: self.lengthBlock(UInt32(maximumPacketSize), blockSize: protection.cipherBlockSize)
+        )
+        parser2.append(bytes: &onBoundBlock)
+        XCTAssertThrowsError(try parser2.nextPacket()) { error in
+            XCTAssertEqual((error as? NIOSSHError)?.type, .invalidEncryptedPacketLength)
+        }
+    }
+
+    /// One cipher block whose first four bytes are `length` big-endian, zero-padded.
+    private func lengthBlock(_ length: UInt32, blockSize: Int) -> [UInt8] {
+        let be = [
+            UInt8(truncatingIfNeeded: length >> 24), UInt8(truncatingIfNeeded: length >> 16),
+            UInt8(truncatingIfNeeded: length >> 8), UInt8(truncatingIfNeeded: length),
+        ]
+        return be + [UInt8](repeating: 0, count: blockSize - be.count)
+    }
 }
